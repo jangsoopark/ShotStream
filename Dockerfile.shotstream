@@ -1,0 +1,25 @@
+# Extend the CUDA 12.8/PyTorch 2.8/FlashAttention image already built locally.
+# The existing base image must be tagged shotstream:cu128.
+FROM shotstream:cu128
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ffmpeg \
+        git-lfs \
+        libgl1 \
+        libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /workspace
+COPY requirements.inference.txt /tmp/requirements.inference.txt
+
+COPY check_dependencies.py /tmp/check_dependencies.py
+
+RUN python3 -m pip install -r /tmp/requirements.inference.txt && \
+    python3 /tmp/check_dependencies.py
+
+CMD ["/bin/bash"]

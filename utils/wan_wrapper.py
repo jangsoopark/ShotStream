@@ -14,46 +14,80 @@ from wan.modules.causal_model import CausalWanModel
 
 
 class WanTextEncoder(torch.nn.Module):
-    def __init__(self) -> None:
+    """Load UMT5 in BF16 on CPU without a duplicate FP32 weight allocation.
+
+    The GPU receives only text embeddings. This is for memory-constrained
+    inference; CPU text encoding will be slower than GPU encoding.
+    """
+
+    def __init__(self, output_device=None) -> None:
         super().__init__()
 
+        if output_device is None:
+            output_device = (
+                torch.device(f"cuda:{torch.cuda.current_device()}")
+                if torch.cuda.is_available() else torch.device("cpu")
+            )
+        elif isinstance(output_device, int):
+            output_device = torch.device(f"cuda:{output_device}")
+        self.output_device = torch.device(output_device)
+
+        checkpoint_path = (
+            "wan_models/Wan2.1-T2V-1.3B/"
+            "models_t5_umt5-xxl-enc-bf16.pth"
+        )
+        # Build the module without allocating random FP32 parameters.
         self.text_encoder = umt5_xxl(
             encoder_only=True,
             return_tokenizer=False,
-            dtype=torch.float32,
-            device=torch.device('cpu')
+            dtype=torch.bfloat16,
+            device="meta",
         ).eval().requires_grad_(False)
-        self.text_encoder.load_state_dict(
-            torch.load("wan_models/Wan2.1-T2V-1.3B/models_t5_umt5-xxl-enc-bf16.pth",
-                       map_location='cpu', weights_only=False)
+
+        # Memory-map the checkpoint, then directly assign its CPU tensors.
+        # These operations are supported in the project's torch==2.8.0.
+        state_dict = torch.load(
+            checkpoint_path,
+            map_location="cpu",
+            mmap=True,
+            weights_only=True,
         )
-        
-        # Move text encoder to GPU if available
-        if torch.cuda.is_available():
-            self.text_encoder = self.text_encoder.cuda()
+        self.text_encoder.load_state_dict(
+            state_dict, strict=True, assign=True
+        )
+        del state_dict
+        if any(p.is_meta for p in self.text_encoder.parameters()):
+            raise RuntimeError("UMT5 checkpoint left parameters on meta device")
+        self.text_encoder.eval().requires_grad_(False)
 
         self.tokenizer = HuggingfaceTokenizer(
-            name="wan_models/Wan2.1-T2V-1.3B/google/umt5-xxl/", seq_len=512, clean='whitespace')
+            name="wan_models/Wan2.1-T2V-1.3B/google/umt5-xxl/",
+            seq_len=512,
+            clean="whitespace",
+        )
+        print(
+            f"[T5] weights={self.device}, output={self.output_device}, "
+            f"dtype={next(self.text_encoder.parameters()).dtype}",
+            flush=True,
+        )
 
     @property
     def device(self):
-        # Assume we are always on GPU
-        return torch.cuda.current_device()
+        return next(self.text_encoder.parameters()).device
 
     def forward(self, text_prompts: List[str]) -> dict:
         ids, mask = self.tokenizer(
-            text_prompts, return_mask=True, add_special_tokens=True)
+            text_prompts, return_mask=True, add_special_tokens=True
+        )
         ids = ids.to(self.device)
         mask = mask.to(self.device)
         seq_lens = mask.gt(0).sum(dim=1).long()
-        context = self.text_encoder(ids, mask)
-        # ids = ids.to(torch.device('cpu'))
-        # mask = mask.to(torch.device('cpu'))
-        for u, v in zip(context, seq_lens):
-            u[v:] = 0.0  # set padding to 0.0
-
+        with torch.no_grad():
+            context = self.text_encoder(ids, mask)
+            for tokens, seq_len in zip(context, seq_lens):
+                tokens[seq_len:] = 0.0
         return {
-            "prompt_embeds": context
+            "prompt_embeds": context.to(device=self.output_device)
         }
 
 

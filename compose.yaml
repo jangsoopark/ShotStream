@@ -1,0 +1,33 @@
+
+services:
+  shotstream:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    image: shotstream:cu128
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    working_dir: /workspace
+
+    volumes:
+      - .:/workspace
+      - huggingface_cache:/root/.cache/huggingface
+
+    environment:
+      HF_HOME: /root/.cache/huggingface
+      PYTHONUNBUFFERED: "1"
+
+    shm_size: "2gb"
+    stdin_open: true
+    tty: true
+
+volumes:
+  huggingface_cache:
