@@ -466,7 +466,7 @@ class FrameConcatCausalModel(nn.Module):
 
         self.generator.model.requires_grad_(True)
 
-        self.text_encoder = WanTextEncoder().to(device)
+        self.text_encoder = WanTextEncoder(output_device=device)
         self.text_encoder.requires_grad_(False)
 
         self.vae = WanVAEWrapper().to(device)

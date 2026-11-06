@@ -1,0 +1,2 @@
+shot_num_from_caption,json_path,frame_number
+2,demo/testdata/json/first_test.json,"[[0, 81], [81, 162]]"

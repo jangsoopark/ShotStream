@@ -1,0 +1,12 @@
+# Combine with the existing compose.yaml; do not replace it.
+# docker compose -f compose.yaml -f compose.shotstream.yaml build
+services:
+  shotstream:
+    build:
+      context: .
+      dockerfile: Dockerfile.shotstream
+    image: shotstream:inference-cu128
+    volumes:
+      - ./wan_models:/workspace/wan_models
+      - ./ckpts:/workspace/ckpts
+      - ./demo/infer:/workspace/demo/infer

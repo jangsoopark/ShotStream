@@ -1,5 +1,78 @@
-# macOS
-.DS_Store
+# ============================================================
+# ShotStream: keep source, configs, Docker files, and test CSVs.
+# Exclude downloaded models, caches, logs, and generated outputs.
+# ============================================================
 
+# --- Original upstream exclusions ---
+.DS_Store
 upload_to_hf.py
 strip_ckpts.py
+
+# --- OS / editor files ---
+Thumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Python caches / local environments ---
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+
+# --- Download caches (at any depth) ---
+.cache/
+.huggingface/
+.hf_home/
+
+# --- Model checkpoints ---
+# Keep the small ShotStream YAML configs needed by inference.
+/ckpts/*
+!/ckpts/*.yaml
+!/ckpts/*.yml
+
+# Downloaded Wan2.1 weights, tokenizer files and its nested Git repo.
+# NOTE: /wan/ contains the Python implementation and is NOT ignored.
+/wan_models/
+
+# Other checkpoints / training arrays saved outside the model dirs.
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.engine
+*.gguf
+*.npz
+*.npy
+
+# --- Generated videos, logs, evaluation/training outputs ---
+/demo/infer/
+/demo/data/ode_sample/
+logs/
+outputs/
+results/
+runs/
+wandb/
+tensorboard/
+lightning_logs/
+*.log
+*.log.*
+
+# --- Local temporary files ---
+*.tmp
+*.temp
