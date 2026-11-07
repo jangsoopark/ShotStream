@@ -1,10 +1,14 @@
 # Adopted from https://github.com/guandeh17/Self-Forcing
 # SPDX-License-Identifier: Apache-2.0
+import os
+from bisect import bisect_right
+
 import torch
 import torch.distributed as dist
 from model.base import FrameConcatCausalModel
 
 from einops import rearrange
+from torchvision.io import write_video
 
 import peft
 # from peft import get_peft_model_state_dict
@@ -53,6 +57,7 @@ class CausalInferenceArPipeline(FrameConcatCausalModel):
         self,
         batch,
         use_wo_rope_cache=False,
+        shot_output_dir=None,
     ) -> torch.Tensor:
         """
         Perform inference on the given noise and text prompts.
@@ -132,9 +137,19 @@ class CausalInferenceArPipeline(FrameConcatCausalModel):
                 # condition_frames = video_data_gt[condition_indices]  # f h w c
                 condition_frames = torch.zeros([self.max_context_frames, 480, 832, 3]).to(device).to(dtype)  # Hard Code for Resolution
             else:
-                video_data = torch.concat(output_images_list, dim=0).to(device).to(dtype)
-                video_data = rearrange(video_data, 'f c h w -> f h w c')
-                condition_frames = video_data[condition_indices]  # f h w c
+                # Select only the required context frames on CPU; do not copy
+                # all previously decoded shots back onto the GPU.
+                offsets = [0]
+                for frames in output_images_list:
+                    offsets.append(offsets[-1] + frames.shape[0])
+                selected_frames = []
+                for global_idx in condition_indices.cpu().tolist():
+                    shot_idx = bisect_right(offsets, global_idx) - 1
+                    local_idx = global_idx - offsets[shot_idx]
+                    selected_frames.append(output_images_list[shot_idx][local_idx])
+                condition_frames = torch.stack(selected_frames, dim=0)
+                condition_frames = rearrange(condition_frames, 'f c h w -> f h w c')
+                condition_frames = condition_frames.to(device=device, dtype=dtype)
 
             if self.dynamic_sample_frames:
                 assert condition_frames.shape[0] == self.max_context_frames
@@ -330,15 +345,45 @@ class CausalInferenceArPipeline(FrameConcatCausalModel):
             if torch.cuda.is_available():
                 torch.cuda.synchronize(device=device)
 
-            # Step 3: Decode the output
+            # Step 3: Decode each shot once, and move the pixels to CPU.
             video = self.vae.decode_to_pixel(output.to(noise.device), use_cache=False)
-            output_images_list.append(video[0])
-            shot_flags_output += [latent_gen_iter] * video.shape[1]
-            print(f"shot {latent_gen_iter} end")
+            shot_frames = video[0].cpu()
+            shot_flags_output += [latent_gen_iter] * shot_frames.shape[0]
+            output_images_list.append(shot_frames)
+            del video
 
-        video = torch.concat(output_images_list, dim=0)
-        video = (video * 0.5 + 0.5).clamp(0, 1)
-        
+            # Persist the completed shot before starting the next one.  This
+            # makes long GPU runs recoverable even if later shots fail.
+            if shot_output_dir is not None:
+                os.makedirs(shot_output_dir, exist_ok=True)
+                path = os.path.join(
+                    shot_output_dir, f"shot_{latent_gen_iter + 1:02d}.mp4"
+                )
+                temporary = os.path.join(
+                    shot_output_dir, f"shot_{latent_gen_iter + 1:02d}.partial.mp4"
+                )
+                # VAE pixels are in [-1, 1]; video encoder expects uint8 NHWC.
+                frames_uint8 = (
+                    (shot_frames * 0.5 + 0.5)
+                    .clamp_(0, 1)
+                    .mul_(255)
+                    .round_()
+                    .to(torch.uint8)
+                )
+                frames_uint8 = rearrange(
+                    frames_uint8, 'f c h w -> f h w c'
+                ).contiguous()
+                write_video(temporary, frames_uint8, fps=16)
+                os.replace(temporary, path)
+                del frames_uint8
+                print(f"[saved] {path}", flush=True)
+
+            print(f"shot {latent_gen_iter} end", flush=True)
+
+        # Output concatenation/normalization must remain on CPU.  Normalize
+        # in-place to avoid allocating another full-size RGB video tensor.
+        video = torch.cat(output_images_list, dim=0)
+        video.mul_(0.5).add_(0.5).clamp_(0, 1)
         return video[None]
 
     def _initialize_kv_cache(self, batch_size, dtype, device, kv_cache_size_override: int | None = None):

@@ -14,10 +14,10 @@ docker compose \
     CUDA_VISIBLE_DEVICES=0 python3 Inference_Causal.py \
       --config_path ckpts/shotstream.yaml \
       --resume_ckpt ckpts/shotstream_merged.pt \
-      --data_path demo/testdata/first_test.csv \
+      --data_path demo/testdata/second_test.csv \
       --output_folder demo/infer \
       --multi_caption True \
       --seed 42
-  ' 2>&1 | tee logs/first_test.log
+  ' 2>&1 | tee logs/second_test.log
 
 find demo/infer -type f -name '*.mp4' -ls

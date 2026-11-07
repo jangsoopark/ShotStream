@@ -88,6 +88,7 @@ if config.resume_ckpt:
     state_dict = torch.load(config.resume_ckpt, map_location="cpu")
     print(f"resume generator's ckpt from {config.resume_ckpt}")
     pipeline.generator.load_state_dict(state_dict['generator'])
+    del state_dict
 
 pipeline = pipeline.to(dtype=torch.bfloat16)
 
@@ -122,17 +123,17 @@ for i, batch_data in tqdm(enumerate(dataloader), disable=(local_rank != 0)):
     elif isinstance(batch_data, list):
         batch = batch_data[0]  # First (and only) item in the batch
 
-    all_video = []
-    num_generated_frames = 0  # Number of generated (latent) frames
-
     video = pipeline.inference(
         batch=batch,
         use_wo_rope_cache=config.use_wo_rope_cache,
+        shot_output_dir=os.path.join(args.output_folder, f"{i:03d}_shots"),
     )
-    current_video = rearrange(video, 'b t c h w -> b t h w c').cpu()
-    all_video.append(current_video)
-
-    video = 255.0 * torch.cat(all_video, dim=1)
+    # pipeline.inference now returns a normalized CPU tensor. Convert to
+    # uint8 on CPU so torchvision/PyAV does not receive a large float video.
+    current_video = rearrange(video, 'b t c h w -> b t h w c')
+    del video
+    current_video.mul_(255).round_().clamp_(0, 255)
+    video = current_video.to(torch.uint8).contiguous()
 
     pipeline.vae.model.clear_cache()
 
